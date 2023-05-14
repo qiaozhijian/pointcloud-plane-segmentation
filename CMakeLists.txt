@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(o3dapp)
+project(plane_segmentation)
 
 set(CMAKE_CXX_STANDARD 14)
 # set(CMAKE_BUILD_TYPE Release)
