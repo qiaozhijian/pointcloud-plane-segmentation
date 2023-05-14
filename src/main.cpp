@@ -1,49 +1,11 @@
-#include <chrono>
-#include <iostream>
-#include <limits>
-#include <memory>
-#include <set>
-#include <vector>
-
-#include <Eigen/Dense>
-#include <open3d/Open3D.h>
-
 #include <rspd/planedetector.h>
+#include "utils.h"
+#include "patchwork/patchwork.hpp"
 
-using namespace open3d;
-
-std::shared_ptr<geometry::TriangleMesh> makePlane(
-    const Eigen::Vector3d& center, const Eigen::Vector3d& normal,
-    const Eigen::Vector3d& basisU, const Eigen::Vector3d& basisV)
-{
-    auto mesh_ptr = std::make_shared<geometry::TriangleMesh>();
-
-    mesh_ptr->vertices_.resize(8);
-    mesh_ptr->vertices_[0] = center - basisU - basisV;
-    mesh_ptr->vertices_[1] = center - basisU + basisV;
-    mesh_ptr->vertices_[2] = center + basisU - basisV;
-    mesh_ptr->vertices_[3] = center + basisU + basisV;
-
-    mesh_ptr->vertices_[4] = center + 0.01*normal - basisU - basisV;
-    mesh_ptr->vertices_[5] = center + 0.01*normal - basisU + basisV;
-    mesh_ptr->vertices_[6] = center + 0.01*normal + basisU - basisV;
-    mesh_ptr->vertices_[7] = center + 0.01*normal + basisU + basisV;
-    mesh_ptr->triangles_.push_back(Eigen::Vector3i(4, 7, 5));
-    mesh_ptr->triangles_.push_back(Eigen::Vector3i(4, 6, 7));
-    mesh_ptr->triangles_.push_back(Eigen::Vector3i(0, 2, 4));
-    mesh_ptr->triangles_.push_back(Eigen::Vector3i(2, 6, 4));
-    mesh_ptr->triangles_.push_back(Eigen::Vector3i(0, 1, 2));
-    mesh_ptr->triangles_.push_back(Eigen::Vector3i(1, 3, 2));
-    mesh_ptr->triangles_.push_back(Eigen::Vector3i(1, 5, 7));
-    mesh_ptr->triangles_.push_back(Eigen::Vector3i(1, 7, 3));
-    mesh_ptr->triangles_.push_back(Eigen::Vector3i(2, 3, 7));
-    mesh_ptr->triangles_.push_back(Eigen::Vector3i(2, 7, 6));
-    mesh_ptr->triangles_.push_back(Eigen::Vector3i(0, 4, 1));
-    mesh_ptr->triangles_.push_back(Eigen::Vector3i(1, 4, 5));
-    return mesh_ptr;
-}
-
+using namespace rspd;
 // ----------------------------------------------------------------------------
+void ReadBinOpen3d(const std::string& filename, open3d::geometry::PointCloud &cloud);
+pcl::PointCloud<pcl::PointXYZI>::Ptr getCloud(std::string filename);
 
 int main(int argc, char *argv[]) {
 
@@ -55,78 +17,27 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    static constexpr int nrNeighbors = 75;
-    const geometry::KDTreeSearchParam &search_param = geometry::KDTreeSearchParamKNN(nrNeighbors);
+    auto cloud_ptr = std::make_shared<open3d::geometry::PointCloud>();
+    //ReadBinOpen3d(argv[1], *cloud_ptr);
 
-    auto cloud_ptr = std::make_shared<geometry::PointCloud>();
-    if (io::ReadPointCloud(argv[1], *cloud_ptr)) {
-        utility::LogInfo("Successfully read {}\n", argv[1]);
-    } else {
-        utility::LogWarning("Failed to read {}\n\n", argv[1]);
-        return 1;
+    pcl::PointCloud<pcl::PointXYZI>::Ptr ptrCloudI = getCloud(argv[1]);
+    pcl::PointCloud<pcl::PointXYZI> srcGround;
+    pcl::PointCloud<pcl::PointXYZI>::Ptr ptrSrcNonground(new pcl::PointCloud<pcl::PointXYZI>);
+    double tSrc = 0.0;
+    PatchWork<pcl::PointXYZI> patchwork("KITTI");
+    patchwork.estimate_ground(*ptrCloudI, srcGround, *ptrSrcNonground, tSrc);
+
+    cloud_ptr->points_.resize(ptrSrcNonground->size());
+    for (int i = 0; i < ptrSrcNonground->size(); i++) {
+        auto &pt = cloud_ptr->points_[i];
+        pt.x() = ptrSrcNonground->points[i].x;
+        pt.y() = ptrSrcNonground->points[i].y;
+        pt.z() = ptrSrcNonground->points[i].z;
     }
 
-    if (cloud_ptr->HasNormals()) {
-        std::cout << "already has normals" << std::endl;
-    } else {
-        std::cout << "no normals" << std::endl;
-    }
+    std::set<Plane*> planes = rspd::planeSegmentation(cloud_ptr);
 
-    auto t1 = std::chrono::high_resolution_clock::now();
-    cloud_ptr->EstimateNormals(search_param);
-    const double t_normals = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::high_resolution_clock::now() - t1).count();
-    std::cout << "o3d EstimateNormals: " << t_normals << " seconds" << std::endl;
-
-    t1 = std::chrono::high_resolution_clock::now();
-    geometry::KDTreeFlann kdtree;
-    kdtree.SetGeometry(*cloud_ptr);
-    std::vector<std::vector<int>> neighbors;
-    neighbors.resize(cloud_ptr->points_.size());
-    std::cout << "num points: " << cloud_ptr->points_.size() << std::endl;
-#pragma omp parallel for schedule(static)
-    for (int i = 0; i < (int)cloud_ptr->points_.size(); i++) {
-        std::vector<int> indices;
-        std::vector<double> distance2;
-        if (kdtree.Search(cloud_ptr->points_[i], search_param, indices, distance2)/* >= 3*/) {
-            neighbors[i] = indices;
-        }
-    }
-    const double t_kdtree = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::high_resolution_clock::now() - t1).count();
-    std::cout << "kdtree search: " << t_kdtree << " seconds" << std::endl;
-
-
-    std::cout << "o3d cloud: center: " << cloud_ptr->GetCenter().transpose() << std::endl;
-    Eigen::Vector3d bl = cloud_ptr->GetMinBound();
-    Eigen::Vector3d tr = cloud_ptr->GetMaxBound();
-    std::cout << "o3d cloud: ext center: " << ((bl + tr) / 2).transpose() << std::endl;
-    std::cout << "o3d cloud: bottom left: " << bl.transpose() << std::endl;
-    std::cout << "o3d cloud: top right: " << tr.transpose() << std::endl;
-
-    t1 = std::chrono::high_resolution_clock::now();
-    PlaneDetector rspd(cloud_ptr, neighbors);
-    std::set<Plane*> planes = rspd.detect();
-    const double t_rspd = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::high_resolution_clock::now() - t1).count();
-    std::cout << "rspd detect: " << t_rspd << " seconds" << std::endl;
-    std::cout << std::endl;
-
-    std::cout << "Detected the following " << planes.size() << " planes:" << std::endl;
-    for (const auto& p : planes) {
-        std::cout << p->normal().transpose() << " ";
-        std::cout << p->distanceFromOrigin() << "\t";
-        std::cout << p->center().transpose() << "\t";
-        std::cout << p->basisU().transpose() << "\t";
-        std::cout << p->basisV().transpose() << std::endl;
-    }
-    std::cout << "==============================" << std::endl;
-
-    std::cout << std::endl;
-    std::cout << "EstimateNormals: " << t_normals << " seconds" << std::endl;
-    std::cout << "DetectPlanarPatches: " << planes.size() << " in " << (t_rspd+t_kdtree) << " seconds" << std::endl;
-
-    //
     // Visualization
-    //
-
     // create a vector of geometries to visualize, starting with input point cloud
     std::vector<std::shared_ptr<const geometry::Geometry>> geometries;
     geometries.reserve(1 + planes.size());
@@ -140,12 +51,19 @@ int main(int argc, char *argv[]) {
     colors.push_back(Eigen::Vector3d(0.4660, 0.6740, 0.1880));
     colors.push_back(Eigen::Vector3d(0.3010, 0.7450, 0.9330));
     colors.push_back(Eigen::Vector3d(0.6350, 0.0780, 0.1840));
+    colors.push_back(Eigen::Vector3d(0.75, 0.75, 0.75));
+    colors.push_back(Eigen::Vector3d(0, 0.4470, 0.7410));
+    colors.push_back(Eigen::Vector3d(0.1250, 0.6940, 0.1250));
+    colors.push_back(Eigen::Vector3d(0.75, 0.75, 0));
+    colors.push_back(Eigen::Vector3d(0.75, 0, 0.75));
+    colors.push_back(Eigen::Vector3d(0, 0.75, 0.75));
+    colors.push_back(Eigen::Vector3d(0.25, 0.25, 0.25));
 
     // add any planes
     size_t i = 0;
     for (const auto& p : planes) {
         auto pviz = makePlane(p->center(), p->normal(), p->basisU(), p->basisV());
-        pviz->PaintUniformColor(colors[i%6]);
+        pviz->PaintUniformColor(colors[i%colors.size()]);
         geometries.push_back(pviz);
 
         ++i;
@@ -184,4 +102,58 @@ int main(int argc, char *argv[]) {
     // utility::LogInfo("End of the test.\n");
 
     return 0;
+}
+
+void ReadBinOpen3d(const std::string& filename, open3d::geometry::PointCloud &cloud) {
+    FILE *file = fopen(filename.c_str(), "rb");
+    if (!file) {
+        std::cerr << "error: failed to load point cloud " << filename << std::endl;
+        return;
+    }
+    // check whether the suffix of the file is bin
+    std::string suffix = filename.substr(filename.find_last_of('.') + 1);
+    if (suffix != "bin") {
+        std::cerr << "error: failed to load point cloud " << filename << std::endl;
+        return;
+    }
+
+    std::vector<float> buffer(1000000);
+    size_t num_points =
+            fread(reinterpret_cast<char *>(buffer.data()), sizeof(float), buffer.size(), file) / 4;
+    fclose(file);
+    cloud.points_.resize(num_points);
+    for (int i = 0; i < num_points; i++) {
+        auto &pt = cloud.points_[i];
+        pt.x() = buffer[i * 4];
+        pt.y() = buffer[i * 4 + 1];
+        pt.z() = buffer[i * 4 + 2];
+        std::cout << pt.x() << " " << pt.y() << " " << pt.z() << " " << buffer[i * 4] << " " << buffer[i * 4 + 1]
+                  << " " << buffer[i * 4 + 2] << std::endl;
+    }
+}
+
+pcl::PointCloud<pcl::PointXYZI>::Ptr getCloud(std::string filename) {
+    FILE *file = fopen(filename.c_str(), "rb");
+    if (!file) {
+        std::cerr << "error: failed to load point cloud " << filename << std::endl;
+        return nullptr;
+    }
+
+    std::vector<float> buffer(1000000);
+    size_t num_points =
+            fread(reinterpret_cast<char *>(buffer.data()), sizeof(float), buffer.size(), file) / 4;
+    fclose(file);
+
+    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZI>());
+    cloud->resize(num_points);
+
+    for (int i = 0; i < num_points; i++) {
+        auto &pt = cloud->at(i);
+        pt.x = buffer[i * 4];
+        pt.y = buffer[i * 4 + 1];
+        pt.z = buffer[i * 4 + 2];
+        pt.intensity = buffer[i * 4 + 3];
+    }
+
+    return cloud;
 }

@@ -12,19 +12,22 @@ set(CMAKE_BUILD_TYPE RelWithDebInfo)
 # cmake -DCMAKE_PREFIX_PATH=/home/plusk01/dev/o3d/Open3D/build/install ..
 find_package(Open3D)
 find_package(OpenMP)
-add_subdirectory(rspd)
+find_package(PCL REQUIRED)
 
-get_target_property(LIBB_INCLUDES rspd INCLUDE_DIRECTORIES)
-message(STATUS "rspd includes: ${LIBB_INCLUDES}")
-
+include_directories(
+        ${PROJECT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/include
+        ${PCL_INCLUDE_DIRS}
+)
 # Open3D
 if (Open3D_FOUND)
     message(STATUS "Found Open3D ${Open3D_VERSION} at ${Open3D_CONFIG}")
     add_executable(main src/main.cpp)
-    target_link_libraries(main PRIVATE Open3D::Open3D rspd)
+    target_link_libraries(main PRIVATE Open3D::Open3D)
     if(OpenMP_CXX_FOUND)
       target_link_libraries(main PRIVATE OpenMP::OpenMP_CXX)
     endif()
+    target_link_libraries(main PRIVATE ${PCL_LIBRARIES})
 else()
     message(SEND_ERROR "Open3D not found")
 endif()
