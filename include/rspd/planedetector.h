@@ -459,13 +459,13 @@ namespace rspd{
         double outlierRatio = 0.75;
         double minPlaneEdgeLength = 1.0;
         int minNumPoints = 30;
-        //if (dataset == "KITTI"){
-        //    minNormalDiff = 10.0;
-        //    maxDist = 10.0;
-        //    outlierRatio = 0.1;
-        //    minPlaneEdgeLength = 1.0;
-        //    minNumPoints = 30;
-        //}
+        if (dataset == "KITTI"){
+            minNormalDiff = 10.0;
+            maxDist = 10.0;
+            outlierRatio = 0.1;
+            minPlaneEdgeLength = 1.0;
+            minNumPoints = 30;
+        }
 
         const open3d::geometry::KDTreeSearchParam &search_param = open3d::geometry::KDTreeSearchParamKNN(nrNeighbors);
         cloud_ptr->EstimateNormals(search_param); // 108.6ms for 122k points in kitti bin file
