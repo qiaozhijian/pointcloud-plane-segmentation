@@ -29,7 +29,7 @@ Using the provided test data, you can run `rspd` on a point cloud with
 
 ```bash
 $ cd build
-$ ./main ../data/blue.pcd
+$ ./main ../data/000000.bin
 ```
 
 ### Open3D Dependency
